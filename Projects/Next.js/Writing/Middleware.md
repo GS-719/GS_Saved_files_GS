@@ -454,5 +454,159 @@ File Structure & Configuration
 		- It’s the only way to manipulate requests/responses inside middleware — you can’t use res.writeHead() or res.end() like in Node.js.
 
 7. What’s the difference between NextResponse.redirect() and NextResponse.rewrite()?
+	NextResponse.redirect()
+		What it does: Redirects the user to a different URL.
+		Effect: The browser’s URL changes (client sees the new URL).
+		Use case: Redirecting unauthenticated users to /login, or redirecting old routes to new ones.
 
+		Example:
+			import { NextResponse } from "next/server";
+			export function middleware(req) {
+			const isLoggedIn = false;
+			if (!isLoggedIn) {
+				return NextResponse.redirect(new URL("/login", req.url));
+			}
+			return NextResponse.next();
+			}
+
+		If a user visits /dashboard, they get redirected to /login, and the browser shows /login.
+
+	NextResponse.rewrite()
+		What it does: Internally serves a different page while keeping the original URL in the browser.
+		Effect: The browser’s URL does not change.
+		Use case: Serving different content for the same route, A/B testing, localization, or proxying routes.
+
+		Example:
+			import { NextResponse } from "next/server";
+			export function middleware(req) {
+			const url = req.nextUrl;
+			if (url.pathname === "/about") {
+				return NextResponse.rewrite(new URL("/info", req.url));
+			}
+			return NextResponse.next();
+			}
+
+		If a user visits /about, they see the content from /info, but the browser still shows /about.
+
+		Comparision Table
+		Feature							redirect()													rewrite()
+		User-visible URL change			Yes — browser URL changes									No — browser URL stays the same
+		Client round-trip				Yes — triggers a full client-side redirect					No — handled internally at the edge
+		Use case						Auth redirects, onboarding flows, external links			Localization, A/B testing, internal routing
+		Performance Impact				Slightly higher — involves network round-trip				Lower — stays within edge runtime
+		SEO implications				Can affect crawl/indexing									Transparent to crawlers — no redirect status code
+
+		Key Difference
+			redirect() → Changes the user’s URL (client-side redirect).
+			rewrite() → Keeps the same URL but serves different content (server-side rewrite).
+
+8. How do you read and set cookies inside Middleware, and how can you modify request or response headers for analytics, caching, or security (including adding CSP, CORS, HSTS, etc.)?
+	1. Reading & Setting Cookies in Middleware
+		In Next.js Middleware, you use the cookies API available on the NextRequest and NextResponse objects.
+
+		Read Cookies
+		import { NextResponse } from "next/server";
+		import type { NextRequest } from "next/server";
+		export function middleware(req: NextRequest) {
+			// Reading cookies from the request
+			const token = req.cookies.get("token")?.value;
+			if (!token) {
+				// If no token, redirect to login
+				return NextResponse.redirect(new URL("/login", req.url));
+			}
+
+			return NextResponse.next();
+		}
+
+		Set Cookies
+			import { NextResponse } from "next/server";
+			import type { NextRequest } from "next/server";
+			export function middleware(req: NextRequest) {
+				const res = NextResponse.next();
+				// Set a cookie
+				res.cookies.set("user", "GS", {
+					httpOnly: true,
+					secure: true,
+					path: "/",
+					sameSite: "strict",
+				});
+				return res;
+			}
+
+		You can also delete cookies:
+			res.cookies.delete("token");
+
+		Cookies are great for auth tokens, user preferences, A/B testing buckets, and session hints — but remember, you can’t access the request body in middleware, so cookies are your best bet for lightweight state.
+	
+	2. Modifying Request & Response Headers
+		In Next.js, cookies are primarily accessed through the request headers, but you can also read and write cookies in the response—especially in middleware, route handlers, and server actions.
+		You can add, remove, or update headers on the request or response for analytics, caching, or security.
+
+		Adding Custom Headers (Analytics / Debugging)
+
+			export function middleware(req: NextRequest) {
+				const res = NextResponse.next();
+				// Example: custom analytics header
+				response.headers.set('X-Request-ID', crypto.randomUUID());
+				response.headers.set('X-Geo-Region', request.geo?.region || 'unknown');
+			return res;
+			}
+
+
+		Setting Security Headers (CSP, HSTS, CORS, etc.)
+			
+			export function middleware(req: NextRequest) {
+				const res = NextResponse.next();
+				// Content Security Policy
+				res.headers.set(
+					"Content-Security-Policy",
+					"default-src 'self'; script-src 'self' https://trustedscripts.example.com"
+				);
+				// Strict Transport Security (HSTS)
+				res.headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+				// Cross-Origin Resource Sharing (CORS)
+				res.headers.set("Access-Control-Allow-Origin", "*");
+				res.headers.set("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+				res.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+				// Prevent clickjacking
+				res.headers.set("X-Frame-Options", "DENY");
+				// Prevent MIME-sniffing
+				res.headers.set("X-Content-Type-Options", "nosniff");
+				return res;
+			}
+
+
+
+		Common Security Headers in Middleware
+
+		Header												Purpose																												Example Value																						Usage in Middleware
+		Content-Security-Policy (CSP)						Controls what resources (scripts, styles, images, etc.) the browser can load, preventing XSS attacks.				default-src 'self'; script-src 'self' https://cdn.example.com; object-src 'none'					res.headers.set("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.example.com; object-src 'none'")
+		Strict-Transport-Security (HSTS)					Forces browsers to use HTTPS only, preventing protocol downgrade attacks.											max-age=63072000; includeSubDomains; preload														res.headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload")
+		Access-Control-Allow-Origin (CORS)					Defines which origins can access resources, preventing unauthorized cross-origin requests.							* (allow all) or https://myapp.com (restrict)														res.headers.set("Access-Control-Allow-Origin", "https://myapp.com")
+		X-Frame-Options										Prevents your site from being loaded in an <iframe>, blocking clickjacking attacks.									DENY or SAMEORIGIN																					res.headers.set("X-Frame-Options", "DENY")
+		X-Content-Type-Options								Prevents MIME type sniffing, ensuring files are only interpreted as their declared type.							nosniff																								res.headers.set("X-Content-Type-Options", "nosniff")
+		Referrer-Policy										Controls how much referrer information (URL) is shared with requests.												strict-origin-when-cross-origin																		res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin")
+		Permissions-Policy (previously Feature-Policy)		Controls access to browser features like camera, microphone, geolocation.											geolocation=(), camera=(), microphone=()															res.headers.set("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+		Cache-Control										Defines caching behavior to improve performance and security.														public, max-age=31536000, immutable																	res.headers.set("Cache-Control", "public, max-age=31536000, immutable")
+
+
+		Example: Adding All Security Headers in Middleware
+			
+			import { NextResponse } from "next/server";
+			import type { NextRequest } from "next/server";
+			export function middleware(req: NextRequest) {
+				const res = NextResponse.next();
+				res.headers.set(
+					"Content-Security-Policy",
+					"default-src 'self'; script-src 'self' https://cdn.example.com; object-src 'none'"
+				);
+				res.headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+				res.headers.set("Access-Control-Allow-Origin", "https://myapp.com");
+				res.headers.set("X-Frame-Options", "DENY");
+				res.headers.set("X-Content-Type-Options", "nosniff");
+				res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+				res.headers.set("Permissions-Policy", "geolocation=(), camera=(), microphone=()");
+				res.headers.set("Cache-Control", "public, max-age=31536000, immutable");
+				return res;
+			}
 
