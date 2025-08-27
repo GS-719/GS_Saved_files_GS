@@ -212,7 +212,7 @@ Fundamentals
 
 
 File Structure & Configuration
-1. How do you create a Middleware file in Next.js, including correct naming conventions and file structure for middleware.ts or middleware.js?
+4. How do you create a Middleware file in Next.js, including correct naming conventions and file structure for middleware.ts or middleware.js?
 	How to Create a Middleware File in Next.js?
 		File Name & Location
 			The middleware file must be named exactly:
@@ -272,7 +272,7 @@ File Structure & Configuration
 			Use NextResponse to rewrite, redirect, or continue requests
 			Control scope with config.matcher
 
-2. How do you configure Middleware for specific routes using the matcher option, and what is the execution order if multiple Middleware files or matchers exist?
+5. How do you configure Middleware for specific routes using the matcher option, and what is the execution order if multiple Middleware files or matchers exist?
 	How to Configure Middleware for Specific Routes Using matcher?
 		By default, Middleware runs on every request. To restrict it, you export a config object with a matcher property from your middleware.ts file:
 
@@ -609,4 +609,254 @@ File Structure & Configuration
 				res.headers.set("Cache-Control", "public, max-age=31536000, immutable");
 				return res;
 			}
+
+Authentication & Authorization
+9. How do you protect routes using Middleware for authentication and role-based access control (RBAC)?
+	In Next.js, Middleware is perfect for route protection because it runs before the request is completed, allowing you to inspect cookies, headers, or tokens and decide whether to allow, block, or redirect the request — making authentication and role-based access control (RBAC) one of the most powerful use cases for the Edge Runtime.
+	1. Authentication (checking login status)
+		You typically store a session token or JWT in cookies. Middleware checks for that token, and if it’s missing/invalid, it redirects the user to a login page.
+		// middleware.ts
+		import { NextResponse } from "next/server";
+		import type { NextRequest } from "next/server";
+		export function middleware(req: NextRequest) {
+			const token = req.cookies.get("token"); // session/JWT
+			if (!token) {
+				// Redirect to login if not authenticated
+				return NextResponse.redirect(new URL("/login", req.url));
+			}
+			// Allow request to continue
+			return NextResponse.next();
+		}
+		// Match protected routes only
+		export const config = {
+			matcher: ["/dashboard/:path*", "/profile/:path*"], 
+		};
+
+	2. Role-Based Access Control (RBAC)
+	You can store a role in the cookie/session (e.g., "admin", "user", "editor"). Middleware reads it, and checks if the user has the right permission for the route.
+		// middleware.ts
+		import { NextResponse } from "next/server";
+		import type { NextRequest } from "next/server";
+		export function middleware(req: NextRequest) {
+			const token = req.cookies.get("token"); 
+			const role = req.cookies.get("role"); // e.g., "admin" or "user"
+			if (!token) {
+				return NextResponse.redirect(new URL("/login", req.url));
+			}
+			// Example RBAC: only admins can access /admin/*
+			if (req.nextUrl.pathname.startsWith("/admin") && role !== "admin") {
+				return NextResponse.redirect(new URL("/unauthorized", req.url));
+			}
+			return NextResponse.next();
+		}
+		export const config = {
+			matcher: ["/dashboard/:path*", "/admin/:path*"], 
+		};
+	Benefits of Middleware-Based RBAC
+	- Fast: Runs at the edge, before routing.
+	- Secure: Prevents access before hitting route logic.
+	- Scalable: Easily extendable to new roles and routes.
+
+10. How do you handle JWT tokens or session cookies in Middleware, and what are best practices for redirecting unauthenticated users?
+	In Next.js Middleware, you typically handle authentication using JWT tokens or session cookies. The process starts with reading the cookie or header from the incoming request (using req.cookies.get() or req.headers.get()). For JWTs, you decode and verify the signature to ensure the token is valid and not expired. For session cookies, you check whether the cookie exists and, if needed, validate it against your session store.
+		If the request is unauthenticated (missing, invalid, or expired token/session), the best practice is to:
+		Redirect users to your login page using NextResponse.redirect().
+		Preserve the intended destination (e.g., using a redirectTo query param) so they can be sent back after logging in.
+		Keep sensitive routes protected while still allowing public routes (like /login, /signup, /about) to bypass the check.
+	This approach ensures your app remains secure, user-friendly, and scalable at the edge.
+
+	This how you achieve this...
+
+	Handling JWTs and session cookies in Next.js middleware is all about early interception, lightweight validation, and smart redirection — all at the edge, before your app even starts rendering.
+	Handling JWT Tokens or Session Cookies in Middleware
+
+	Step 1: Read the Cookie
+	Middleware runs in the Edge Runtime, so you use request.cookies.get():
+		const token = request.cookies.get('auth-token')?.value;
+
+	You can also use headers if your token is passed via Authorization, but cookies are more common for web apps.
+
+	Step 2: Decode or Verify the Token
+	You can decode the JWT to extract user info (like role or ID). But remember: Edge Runtime has limited support for Node libraries, so use lightweight or edge-compatible JWT parsers.
+		import { jwtVerify } from 'jose'; // Edge-compatible
+		const secret = new TextEncoder().encode(process.env.JWT_SECRET);
+		const { payload } = await jwtVerify(token, secret);
+
+	Avoid using heavy libraries like jsonwebtoken unless you're sure they're edge-safe.
+
+	Step 3: Check Authentication & Role
+	Use the decoded payload to enforce access control:
+		if (!payload || !payload.role) {
+			return NextResponse.redirect(new URL('/login', request.url));
+		}
+
+		if (request.nextUrl.pathname.startsWith('/admin') && payload.role !== 'admin') {
+			return NextResponse.redirect(new URL('/unauthorized', request.url));
+		}
+
+	Best Practices for Redirecting Unauthenticated Users
+	1. Use NextResponse.redirect()
+	This sends a 302 redirect to the client:
+		return NextResponse.redirect(new URL('/login', request.url));
+
+	2. Preserve the Original Path
+	So users can return after login:
+		const loginUrl = new URL('/login', request.url);
+		loginUrl.searchParams.set('redirect', request.nextUrl.pathname);
+		return NextResponse.redirect(loginUrl);
+
+	3. Scope Middleware with matcher
+	Only run middleware on protected routes:
+	export const config = {
+		matcher: ['/dashboard/:path*', '/admin/:path*'],
+	};
+
+	4. Avoid Redirect Loops
+	Make sure /login and /unauthorized are excluded from middleware logic.
+	Bonus: Modular Auth Middleware
+	Split logic into reusable functions:
+	export async function verifyAuth(request: NextRequest) {
+		const token = request.cookies.get('auth-token')?.value;
+		if (!token) return false;
+		try {
+			const { payload } = await jwtVerify(token, secret);
+			return payload;
+		} catch {
+			return false;
+		}
+	}
+
+	Then use it in your main middleware.ts:
+		const user = await verifyAuth(request);
+		if (!user) return redirectToLogin(request);
+
+
+Advanced Use Cases
+11. How can Middleware be used for localization, geolocation-based routing, A/B testing or feature flags, rate limiting, IP blocking, and logging requests without slowing responses?
+	How can Middleware be used for localization?
+		What Is Localization?
+		Localization is the process of adapting your application’s content, layout, and behavior to match the language, region, and cultural preferences of the user. It’s not just translation.
+		It includes:
+		- Translating text into different languages (e.g., English, Hindi, French)
+		- Formatting dates, currencies, and numbers based on locale
+		- Serving region-specific content (e.g., Indian promotions vs. US offers)
+		- Adjusting layout for right-to-left (RTL) languages like Arabic or Hebrew
+
+		How Middleware Helps with Localization in Next.js
+		Middleware runs before routing, which makes it perfect for detecting and handling localization logic early in the request lifecycle.
+		Common Use Cases:
+		- Detect user locale from cookies, headers, or IP
+		- Redirect to locale-specific routes (e.g., /en, /hi, /fr)
+		- Rewrite URLs internally to serve localized content
+		- Set locale cookies for future requests
+
+		Example: Locale Detection & Redirect
+			import { NextResponse } from 'next/server';
+			import type { NextRequest } from 'next/server';
+			export function middleware(request: NextRequest) {
+				const pathname = request.nextUrl.pathname;
+
+				// Skip static files and API routes
+				if (pathname.startsWith('/api') || pathname.includes('.')) {
+					return NextResponse.next();
+				}
+
+				// Check if locale is already in the URL
+				const locales = ['en', 'hi', 'fr'];
+				const hasLocale = locales.some((locale) => pathname.startsWith(`/${locale}`));
+				if (hasLocale) return NextResponse.next();
+
+				// Detect locale from cookie or header
+				const cookieLocale = request.cookies.get('locale')?.value;
+				const headerLocale = request.headers.get('Accept-Language')?.split(',')[0].slice(0, 2);
+				const rawLocale = cookieLocale || headerLocale;
+				const detectedLocale = locales.includes(rawLocale || '') ? rawLocale : 'en';
+
+				// Redirect to locale-prefixed route
+				const normalizedPath = pathname === '/' ? '' : pathname;
+				return NextResponse.redirect(new URL(`/${detectedLocale}${normalizedPath}`, request.url));	
+			}
+
+			export const config = {
+				matcher: ['/((?!api|_next|favicon.ico).*)'],
+			};
+
+		Best Practices
+		- Use cookies to persist user locale across sessions
+		- Fallback to browser language if no cookie is set
+		- Avoid redirect loops by checking if locale is already present
+		- Use matcher to exclude static assets and API routes
+
+		In short:
+		Middleware makes localization seamless by detecting language preferences and redirecting users to the right localized route, ensuring a smoother global user experience.
+
+	How can Middleware handle geolocation-based routing (sreving content by user's country/region)?
+		What Is Geolocation-Based Routing?
+			In Next.js, Middleware can handle geolocation-based routing by using the request.geo object, which provides country, region, city, and latitude/longitude (only available on Vercel Edge). With this, you can decide which region-specific content or server to serve.
+			It’s the practice of detecting a user’s physical location (usually by IP) and then:
+				- Redirecting them to a region-specific version of your site
+				- Serving localized content (e.g., /in, /us, /uk)
+				- Applying country-specific logic (currency, language, legal disclaimers, etc.)
+
+		How Middleware Enables This in Next.js
+			In Next.js Middleware, geolocation-based routing works by detecting the user’s location (usually through request headers like x-vercel-ip-country, x-vercel-ip-city, etc., automatically provided when deploying on Vercel Edge). Based on that information, you can decide which version of your site or content to serve.
+
+		Example: Redirect Based on Country
+			// middleware.ts
+				import { NextResponse } from "next/server";
+				import type { NextRequest } from "next/server";
+
+				const supportedRegions = new Set(['in', 'us', 'uk']);
+				const fallbackRegion = 'us';
+
+				export function middleware(request: NextRequest) {
+				const { pathname } = request.nextUrl;
+
+				// Skip static files and API routes
+				if (pathname.startsWith('/api') || pathname.includes('.')) {
+					return NextResponse.next();
+				}
+
+				// Check if region is already in the path
+				const hasRegion = Array.from(supportedRegions).some(region =>
+					pathname.startsWith(`/${region}`)
+				);
+				if (hasRegion) return NextResponse.next();
+
+				// Get region from geo or fallback
+				let region = request.geo?.country?.toLowerCase() || fallbackRegion;
+
+				// Validate region
+				if (!supportedRegions.has(region)) {
+					region = fallbackRegion;
+				}
+
+				// Rewrite to region-prefixed path
+				const newPath = pathname === '/' ? `/${region}` : `/${region}${pathname}`;
+					return NextResponse.rewrite(new URL(newPath, request.url));
+				}
+
+				export const config = {
+					matcher: ['/((?!api|_next|favicon.ico).*)'],
+				};
+
+
+		NextResponse.rewrite() lets you serve region-specific content without changing the URL.
+		NextResponse.redirect() can be used if you want to explicitly send users to a region-specific path.
+
+
+		Common Use Cases
+			Redirect Indian users to /in
+			Serve EU users from an EU data center for GDPR compliance
+			Route Asian users to faster servers
+
+		Best Practices
+			Always fallback gracefully if request.geo is undefined (e.g., in local dev or unsupported platforms).
+			Prevent redirect loops by checking if the region is already in the path.
+			Use cookies to persist the region choice if a user overrides it manually.
+			Combine with localization for full geo-language routing (e.g., /in/hi, /us/en).
+			Always set a fallback region (like US) so all users get content even without geo headers.
+
+
+	How can Middleware enable A/B testing or feature flags for experiments?
 
